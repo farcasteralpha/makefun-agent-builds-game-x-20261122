@@ -1,0 +1,5 @@
+Build a tiny browser game in a single HTML file: a fox at the bottom of a night-sky
+canvas catches falling stars with the arrow keys (or A/D, or touch-drag).
+Stars are worth 1 point, rare golden stars are worth 5, bombs cost one of 3 lives.
+30-second timer, live score, game-over screen with the final score and restart.
+Cute, fast, playable in any modern browser with no dependencies.

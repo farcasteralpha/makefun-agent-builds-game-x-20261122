@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Starfall Fox — one prompt, one game</title>
+<style>
+  html,body{margin:0;padding:0;background:#0b1026;height:100%;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+  #wrap{max-width:720px;margin:0 auto;padding:12px;box-sizing:border-box}
+  h1{color:#ffd76a;text-align:center;margin:6px 0 2px;font-size:22px}
+  p.sub{color:#9aa7d8;text-align:center;margin:0 0 10px;font-size:14px}
+  canvas{display:block;width:100%;border-radius:16px;background:#141b3d;box-shadow:0 8px 30px rgba(0,0,0,.5);touch-action:none}
+  #hint{color:#c7cfee;text-align:center;font-size:13px;margin-top:10px}
+  kbd{background:#232c55;border:1px solid #3d4a86;border-radius:6px;padding:1px 7px;color:#fff}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <h1>&#129418; Starfall Fox</h1>
+  <p class="sub">Built from ONE prompt by an AI agent &mdash; catch the stars!</p>
+  <canvas id="game" width="720" height="960"></canvas>
+  <p id="hint"><kbd>&larr;</kbd> <kbd>&rarr;</kbd> or <kbd>A</kbd> <kbd>D</kbd> to move &middot; drag on touch &middot; <kbd>R</kbd> to restart</p>
+</div>
+<script>
+"use strict";
+const cv = document.getElementById("game");
+const ctx = cv.getContext("2d");
+const W = cv.width, H = cv.height;
+
+const state = {
+  mode: "title",      // title | play | over
+  score: 0, best: 0, lives: 3, timeLeft: 30,
+  foxX: W / 2, foxTX: W / 2, keys: {},
+  items: [], spawnT: 0, elapsed: 0, caught: 0,
+};
+try { state.best = Number(localStorage.getItem("starfall-fox-best") || 0); } catch (e) { /* private mode */ }
+
+function rand(a, b) { return a + Math.random() * (b - a); }
+
+function spawnItem() {
+  const r = Math.random();
+  const kind = r < 0.62 ? "star" : r < 0.78 ? "gold" : "bomb";
+  state.items.push({
+    kind, x: rand(40, W - 40), y: -30,
+    vy: rand(240, 380) + state.elapsed * 4,
+    r: kind === "gold" ? 20 : kind === "bomb" ? 22 : 16,
+    spin: rand(0, Math.PI * 2), vs: rand(-2, 2),
+  });
+}
+
+function reset() {
+  state.mode = "play"; state.score = 0; state.lives = 3;
+  state.timeLeft = 30; state.elapsed = 0; state.caught = 0;
+  state.items = []; state.spawnT = 0;
+  state.foxX = W / 2; state.foxTX = W / 2;
+}
+
+function drawFox(x, y) {
+  // A simple cute fox: orange body, white chest, pointy ears, tail.
+  ctx.save(); ctx.translate(x, y);
+  ctx.fillStyle = "#e8823a";                       // tail
+  ctx.beginPath(); ctx.ellipse(-52, 14, 34, 16, -0.5, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = "#fff";
+  ctx.beginPath(); ctx.ellipse(-72, 20, 14, 10, -0.5, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = "#e8823a";                       // body
+  ctx.beginPath(); ctx.ellipse(0, 0, 46, 34, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = "#fff";                          // chest
+  ctx.beginPath(); ctx.ellipse(0, 12, 26, 18, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = "#e8823a";                       // ears
+  ctx.beginPath(); ctx.moveTo(-34, -26); ctx.lineTo(-44, -58); ctx.lineTo(-14, -36); ctx.closePath(); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(34, -26); ctx.lineTo(44, -58); ctx.lineTo(14, -36); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = "#3a1c10";                       // ears inner
+  ctx.beginPath(); ctx.moveTo(-34, -30); ctx.lineTo(-40, -48); ctx.lineTo(-20, -34); ctx.closePath(); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(34, -30); ctx.lineTo(40, -48); ctx.lineTo(20, -34); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = "#1c1c1c";                       // eyes
+  ctx.beginPath(); ctx.arc(-16, -8, 5, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(16, -8, 5, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = "#fff";                          // eye shine
+  ctx.beginPath(); ctx.arc(-14, -10, 2, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(18, -10, 2, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = "#1c1c1c";                       // nose
+  ctx.beginPath(); ctx.arc(0, 6, 6, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+}
+
+function drawStar(x, y, r, spin, gold) {
+  ctx.save(); ctx.translate(x, y); ctx.rotate(spin);
+  ctx.fillStyle = gold ? "#ffd700" : "#ffe9a8";
+  ctx.strokeStyle = gold ? "#ff9d00" : "#f5c542"; ctx.lineWidth = 3;
+  ctx.beginPath();
+  for (let i = 0; i < 10; i++) {
+    const rad = i % 2 === 0 ? r : r * 0.45;
+    const a = (i * Math.PI) / 5 - Math.PI / 2;
+    i === 0 ? ctx.moveTo(Math.cos(a) * rad, Math.sin(a) * rad)
+            : ctx.lineTo(Math.cos(a) * rad, Math.sin(a) * rad);
+  }
+  ctx.closePath(); ctx.fill(); ctx.stroke(); ctx.restore();
+}
+
+function drawBomb(x, y, r, spin) {
+  ctx.save(); ctx.translate(x, y); ctx.rotate(spin);
+  ctx.fillStyle = "#2b2b33"; ctx.strokeStyle = "#555"; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  ctx.strokeStyle = "#ffb347"; ctx.lineWidth = 4;
+  ctx.beginPath(); ctx.moveTo(0, -r); ctx.quadraticCurveTo(14, -r - 16, 22, -r - 8); ctx.stroke();
+  ctx.fillStyle = "#ffd76a";
+  ctx.beginPath(); ctx.arc(22, -r - 8, 5, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = "#fff"; ctx.font = "bold 20px system-ui, sans-serif";
+  ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText("!", 0, 2);
+  ctx.restore();
+}
+
+function drawBackground(t) {
+  const g = ctx.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, "#0b1026"); g.addColorStop(0.7, "#1a2450"); g.addColorStop(1, "#2c1e4d");
+  ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = "rgba(255,255,255,.7)";          // twinkling background stars
+  for (let i = 0; i < 70; i++) {
+    const sx = (i * 137.5) % W, sy = (i * 89.3) % (H * 0.7);
+    const tw = 0.4 + 0.6 * Math.abs(Math.sin(t * 0.001 + i));
+    ctx.globalAlpha = tw * 0.8;
+    ctx.fillRect(sx, sy, 3, 3);
+  }
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = "#f5f0d0";                       // moon
+  ctx.beginPath(); ctx.arc(W - 90, 90, 44, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = "#e2d9a8";
+  ctx.beginPath(); ctx.arc(W - 104, 78, 9, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(W - 74, 102, 6, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = "#0d3319";                       // ground
+  ctx.fillRect(0, H - 60, W, 60);
+  ctx.fillStyle = "#14532d";
+  ctx.fillRect(0, H - 60, W, 6);
+}
+
+function drawHUD() {
+  ctx.fillStyle = "rgba(0,0,0,.35)";
+  ctx.beginPath(); ctx.roundRect(14, 14, 300, 96, 14); ctx.fill();
+  ctx.fillStyle = "#fff"; ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
+  ctx.font = "bold 34px system-ui, sans-serif";
+  ctx.fillText("Score  " + state.score, 30, 52);
+  ctx.font = "20px system-ui, sans-serif"; ctx.fillStyle = "#c7cfee";
+  ctx.fillText("Best  " + state.best, 30, 84);
+  ctx.textAlign = "right"; ctx.fillStyle = "#fff";
+  ctx.font = "bold 34px system-ui, sans-serif";
+  ctx.fillText(Math.ceil(state.timeLeft) + "s", W - 30, 52);
+  ctx.font = "28px system-ui, sans-serif"; ctx.fillStyle = "#ff6b6b";
+  ctx.fillText("♥".repeat(state.lives) + "♡".repeat(3 - state.lives), W - 30, 92);
+}
+
+function drawCenter(title, lines, accent) {
+  ctx.fillStyle = "rgba(5,8,25,.72)"; ctx.fillRect(0, 0, W, H);
+  ctx.textAlign = "center";
+  ctx.fillStyle = accent || "#ffd76a";
+  ctx.font = "bold 64px system-ui, sans-serif";
+  ctx.fillText(title, W / 2, H / 2 - 60);
+  ctx.fillStyle = "#fff"; ctx.font = "28px system-ui, sans-serif";
+  lines.forEach((ln, i) => ctx.fillText(ln, W / 2, H / 2 + 10 + i * 42));
+}
+
+let last = 0;
+function frame(ts) {
+  const dt = Math.min(0.05, (ts - last) / 1000 || 0.016);
+  last = ts;
+  drawBackground(ts);
+
+  if (state.mode === "play") {
+    state.elapsed += dt;
+    state.timeLeft = Math.max(0, 30 - state.elapsed);
+    const speed = 560;
+    if (state.keys.ArrowLeft || state.keys.KeyA) state.foxTX -= speed * dt;
+    if (state.keys.ArrowRight || state.keys.KeyD) state.foxTX += speed * dt;
+    state.foxTX = Math.max(60, Math.min(W - 60, state.foxTX));
+    state.foxX += (state.foxTX - state.foxX) * Math.min(1, dt * 14);
+
+    state.spawnT -= dt;
+    if (state.spawnT <= 0) { spawnItem(); state.spawnT = rand(0.35, 0.7); }
+
+    const foxY = H - 110;
+    for (let i = state.items.length - 1; i >= 0; i--) {
+      const it = state.items[i];
+      it.y += it.vy * dt; it.spin += it.vs * dt;
+      const dx = Math.abs(it.x - state.foxX), dy = Math.abs(it.y - foxY);
+      if (dx < 62 && dy < 56) {
+        if (it.kind === "bomb") {
+          state.lives--;
+          state.items.splice(i, 1);
+          if (state.lives <= 0) endGame();
+        } else {
+          state.score += it.kind === "gold" ? 5 : 1;
+          state.caught++;
+          state.items.splice(i, 1);
+        }
+        continue;
+      }
+      if (it.y > H + 40) state.items.splice(i, 1);
+    }
+    if (state.timeLeft <= 0) endGame();
+  }
+
+  for (const it of state.items) {
+    if (it.kind === "bomb") drawBomb(it.x, it.y, it.r, it.spin);
+    else drawStar(it.x, it.y, it.r, it.spin, it.kind === "gold");
+  }
+  drawFox(state.foxX, H - 110);
+  drawHUD();
+
+  if (state.mode === "title") {
+    drawCenter("STARFALL FOX", [
+      "One prompt. One fox. Thirty seconds.",
+      "Catch stars, dodge bombs.",
+      "Press SPACE or tap to play",
+    ]);
+  } else if (state.mode === "over") {
+    drawCenter("TIME'S UP!", [
+      "You caught " + state.caught + " stars  ·  Score " + state.score,
+      state.score >= state.best && state.score > 0 ? "NEW BEST! 🏆" : "Best " + state.best,
+      "Press R or tap to play again",
+    ], "#ff9d5c");
+  }
+  requestAnimationFrame(frame);
+}
+
+function endGame() {
+  state.mode = "over";
+  if (state.score > state.best) {
+    state.best = state.score;
+    try { localStorage.setItem("starfall-fox-best", String(state.best)); } catch (e) { /* ignore */ }
+  }
+}
+
+function startIfNeeded() { if (state.mode !== "play") reset(); }
+
+window.addEventListener("keydown", (e) => {
+  if (["ArrowLeft", "ArrowRight", "Space"].includes(e.code)) e.preventDefault();
+  state.keys[e.code] = true;
+  if (e.code === "Space" || e.code === "Enter") startIfNeeded();
+  if (e.code === "KeyR") reset();
+});
+window.addEventListener("keyup", (e) => { state.keys[e.code] = false; });
+cv.addEventListener("pointerdown", (e) => {
+  startIfNeeded();
+  const rect = cv.getBoundingClientRect();
+  state.foxTX = ((e.clientX - rect.left) / rect.width) * W;
+});
+cv.addEventListener("pointermove", (e) => {
+  if (e.buttons) {
+    const rect = cv.getBoundingClientRect();
+    state.foxTX = ((e.clientX - rect.left) / rect.width) * W;
+  }
+});
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
